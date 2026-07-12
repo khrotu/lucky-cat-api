@@ -1,0 +1,6 @@
+selenium>=4.16
+requests>=2.31
+fastapi>=0.115
+uvicorn>=0.30
+pydantic>=2.6
+anyio>=4.0

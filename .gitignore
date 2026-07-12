@@ -1,0 +1,5 @@
+__pycache__/
+lumo_analysis/
+cipher.bin
+credentials.json
+msedgedriver.exe
