@@ -1,5 +1,7 @@
 from __future__ import annotations
+import functools
 import json
+import queue as _queue
 import threading
 import time
 import uuid
@@ -12,6 +14,8 @@ from pydantic import BaseModel
 from lc_router import AllCredentialsBusyError, LumoModel, LumoRouter, NoCredentialsError, REGISTRY
 SERVER_NAME = "lucky-cat-api"
 OWNER = "lucky-cat"
+KEEPALIVE_SECONDS = 4.0
+_KEEPALIVE = object()
 class ChatMessage(BaseModel):
     role: str
     content: Union[str, List[Dict[str, Any]], None] = None
@@ -104,14 +108,30 @@ async def _stream_response(router: LumoRouter, messages: List[Dict[str, Any]], m
     tool_order: List[int] = []
     tool_started: Dict[int, bool] = {}
     gen = router.stream(messages, model=model.id, tools=tools, tool_choice=tool_choice, reasoning=reasoning)
+    events: "_queue.Queue[Any]" = _queue.Queue()
+    _sentinel = object()
+    def _pump() -> None:
+        try:
+            for item in gen:
+                events.put(("ev", item))
+        except BaseException as exc:
+            events.put(("exc", exc))
+        finally:
+            events.put(_sentinel)
+    worker = threading.Thread(target=_pump, daemon=True)
+    worker.start()
     try:
         while True:
             try:
-                ev = await anyio.to_thread.run_sync(lambda: next(gen, None))
-            except StopIteration:
+                item = await anyio.to_thread.run_sync(functools.partial(events.get, timeout=KEEPALIVE_SECONDS))
+            except _queue.Empty:
+                yield ": keepalive\n\n"
+                continue
+            if item is _sentinel:
                 break
-            if ev is None:
-                break
+            kind, ev = item
+            if kind == "exc":
+                raise ev
             etype = ev.get("type")
             if etype == "content":
                 text = ev.get("text", "")
