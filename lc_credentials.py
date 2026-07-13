@@ -1,12 +1,16 @@
 from __future__ import annotations
 import json
+import re
 import shutil
+import sys
 import time
 import uuid
+import zipfile
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from urllib.request import urlretrieve
 GUEST_URL = "https://lumo.proton.me/guest/"
 COOKIE_DOMAIN_SUFFIX = "proton.me"
 AUTH_COOKIE_PREFIX = "AUTH-"
@@ -89,7 +93,15 @@ def _make_driver(browser: str):
     options.add_argument("--headless=new")
     options.add_argument("--disable-gpu")
     service = Service(executable_path=local) if local else None
-    return webdriver.Edge(options=options, service=service)
+    try:
+        return webdriver.Edge(options=options, service=service)
+    except Exception as e:
+        if "Unable to obtain driver" in str(e) and not local:
+            fetched = _fetch_edgedriver()
+            if fetched:
+                service = Service(executable_path=fetched)
+                return webdriver.Edge(options=options, service=service)
+        raise
 def _get_all_cookies(driver) -> List[Dict[str, Any]]:
     try:
         result = driver.execute_cdp_cmd("Network.getAllCookies", {})
@@ -125,6 +137,47 @@ def _select_browser() -> str:
     if _find_local_driver("chrome"):
         return "chrome"
     return "edge"
+def _edge_version() -> Optional[str]:
+    import subprocess
+    try:
+        out = subprocess.check_output(
+            'reg query "HKEY_CURRENT_USER\\Software\\Microsoft\\Edge\\BLBeacon" /v version 2>nul || '
+            'reg query "HKLM\\Software\\Microsoft\\Edge\\BLBeacon" /v version 2>nul',
+            shell=True, text=True, stderr=subprocess.DEVNULL,
+        )
+        m = re.search(r"REG_SZ\s+(\d+\.\d+\.\d+\.\d+)", out)
+        if m:
+            return m.group(1)
+    except Exception:
+        pass
+    try:
+        out = subprocess.check_output(
+            ['powershell', '-Command', '(Get-ItemProperty "HKLM:\\SOFTWARE\\Microsoft\\Edge\\BLBeacon").version'],
+            text=True, stderr=subprocess.DEVNULL,
+        )
+        v = out.strip()
+        if re.match(r"\d+\.\d+\.\d+\.\d+", v):
+            return v
+    except Exception:
+        pass
+    return None
+def _fetch_edgedriver() -> Optional[str]:
+    ver = _edge_version()
+    if not ver:
+        return None
+    url = f"https://msedgedriver.microsoft.com/{ver}/edgedriver_win64.zip"
+    dest = Path(__file__).parent / "msedgedriver.exe"
+    try:
+        zip_path = Path(__file__).parent / "edgedriver_win64.zip"
+        print(f"fetching {url}", file=sys.stderr)
+        urlretrieve(url, zip_path)
+        with zipfile.ZipFile(zip_path, "r") as zf:
+            zf.extract("msedgedriver.exe", Path(__file__).parent)
+        zip_path.unlink()
+        return str(dest.resolve())
+    except Exception as e:
+        print(f"fetch error: {e}", file=sys.stderr)
+        return None
 def harvest_one(browser: str, wait_timeout: float = 30.0, settle_seconds: float = 1.5) -> Credential:
     driver = _make_driver(browser)
     try:
