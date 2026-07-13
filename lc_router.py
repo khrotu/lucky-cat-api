@@ -348,14 +348,19 @@ class CredentialPool:
             return
         browser = _select_browser()
         attempts = 0
+        last_error = None
         while self.working() <= GOOD_THRESHOLD and self.total() < MAX_TOTAL and attempts < MAX_TOTAL:
             attempts += 1
             try:
                 cred = harvest_one(browser)
-            except Exception:
+            except Exception as exc:
+                last_error = exc
                 break
             if cred.is_valid():
                 self._add(cred)
+        if self.working() == 0 and last_error:
+            import sys
+            print(f"fetch error: {last_error}", file=sys.stderr)
         self.maybe_replenish()
 class LumoRouter:
     def __init__(self, pool: Optional[CredentialPool] = None, registry: ModelRegistry = REGISTRY) -> None:

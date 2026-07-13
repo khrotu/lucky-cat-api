@@ -66,9 +66,12 @@ def _estimate_tokens(text: str) -> int:
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     router = LumoRouter()
     app.state.router = router
-    print(f"[{SERVER_NAME}] pruning depleted credentials and ensuring a working pool...")
-    await anyio.to_thread.run_sync(lambda: router.ensure_ready(block=True))
-    print(f"[{SERVER_NAME}] working credentials: {router.pool.working()} (total {router.pool.total()})")
+    print("pruning pool...")
+    try:
+        await anyio.to_thread.run_sync(lambda: router.ensure_ready(block=True))
+    except Exception as e:
+        print(f"fetch error: {e}")
+    print(f"{router.pool.working()}/{router.pool.total()} in pool")
     yield
 app = FastAPI(title=SERVER_NAME, version="2.0.0", lifespan=lifespan)
 def get_router(request: Request) -> LumoRouter:
@@ -174,12 +177,16 @@ async def _stream_response(router: LumoRouter, messages: List[Dict[str, Any]], m
             elif etype == "finish":
                 if ev.get("finish_reason") == "content_filter":
                     finish_reason = "content_filter"
-    except (NoCredentialsError, AllCredentialsBusyError) as exc:
-        yield f"data: {json.dumps({'error': {'message': str(exc), 'type': 'service_unavailable'}})}\n\n"
+    except NoCredentialsError as exc:
+        yield f"data: {json.dumps({'error': {'message': str(exc), 'type': 'server_error', 'code': 'no_credentials'}})}\n\n"
+        yield "data: [DONE]\n\n"
+        return
+    except AllCredentialsBusyError as exc:
+        yield f"data: {json.dumps({'error': {'message': str(exc), 'type': 'server_error', 'code': 'all_credentials_busy'}})}\n\n"
         yield "data: [DONE]\n\n"
         return
     except Exception as exc:
-        yield f"data: {json.dumps({'error': {'message': str(exc), 'type': 'upstream_error'}})}\n\n"
+        yield f"data: {json.dumps({'error': {'message': str(exc), 'type': 'server_error', 'code': 'upstream_error'}})}\n\n"
         yield "data: [DONE]\n\n"
         return
     if not started:
@@ -202,11 +209,11 @@ async def chat_completions(request: Request, body: ChatCompletionRequest):
     try:
         result = await anyio.to_thread.run_sync(lambda: router.collect(messages, model=model.id, tools=body.tools, tool_choice=body.tool_choice, reasoning=reasoning))
     except NoCredentialsError as exc:
-        raise HTTPException(status_code=503, detail=str(exc))
+        return JSONResponse(status_code=503, content={"error": {"message": str(exc), "type": "server_error", "code": "no_credentials"}})
     except AllCredentialsBusyError as exc:
-        raise HTTPException(status_code=429, detail=str(exc))
+        return JSONResponse(status_code=429, content={"error": {"message": str(exc), "type": "server_error", "code": "all_credentials_busy"}})
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"upstream error: {exc}")
+        return JSONResponse(status_code=502, content={"error": {"message": str(exc), "type": "server_error", "code": "upstream_error"}})
     prompt_text = "".join(_flatten_content(m.content) for m in body.messages)
     completion_text = result["text"]
     usage = result.get("usage") or {}

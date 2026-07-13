@@ -172,11 +172,11 @@ def harvest(count: int, output: Path = DEFAULT_OUTPUT, append: bool = True, on_e
     return harvested
 def _print_event(kind: str, index: int, count: int, detail) -> None:
     if kind == "ok":
-        print(f"[{index}/{count}] captured {detail}")
+        print(f"{index}/{count} ok")
     elif kind == "skip":
-        print(f"[{index}/{count}] no auth cookie captured, skipping")
+        print(f"{index}/{count} skip")
     else:
-        print(f"[{index}/{count}] failed: {detail}")
+        print(f"{index}/{count} fail {detail}")
 def main() -> int:
     harvest(MAX_CREDENTIALS, on_event=_print_event)
     return 0
