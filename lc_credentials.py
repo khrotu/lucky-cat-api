@@ -80,6 +80,8 @@ def _make_driver(browser: str):
         options.add_argument("--no-default-browser-check")
         options.add_argument("--headless=new")
         options.add_argument("--disable-gpu")
+        options.add_argument("--ignore-certificate-errors")
+        options.add_argument("--disable-web-security")
         service = Service(executable_path=local) if local else None
         return webdriver.Chrome(options=options, service=service)
     from selenium import webdriver
@@ -92,6 +94,8 @@ def _make_driver(browser: str):
     options.add_argument("--no-default-browser-check")
     options.add_argument("--headless=new")
     options.add_argument("--disable-gpu")
+    options.add_argument("--ignore-certificate-errors")
+    options.add_argument("--disable-web-security")
     service = Service(executable_path=local) if local else None
     try:
         return webdriver.Edge(options=options, service=service)
@@ -182,9 +186,15 @@ def harvest_one(browser: str, wait_timeout: float = 30.0, settle_seconds: float 
     driver = _make_driver(browser)
     try:
         driver.set_page_load_timeout(wait_timeout)
-        try:
-            driver.get(GUEST_URL)
-        except Exception:
+        loaded = False
+        for _ in range(3):
+            try:
+                driver.get(GUEST_URL)
+                loaded = True
+                break
+            except Exception:
+                time.sleep(1.0)
+        if not loaded:
             pass
         deadline = time.monotonic() + wait_timeout
         cookies: List[Dict[str, Any]] = []

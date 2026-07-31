@@ -27,6 +27,11 @@ COOLDOWN_BASE = 20.0
 COOLDOWN_MAX = 300.0
 HTTP_TIMEOUT = 90
 MAX_ATTEMPTS = 3
+RETRY_BASE_DELAY = 1.0
+RETRY_MAX_DELAY = 30.0
+MAX_MESSAGES = 40
+MESSAGE_TRIM_TARGET = 30
+import random as _random
 @dataclass(frozen=True)
 class LumoModel:
     id: str
@@ -105,7 +110,12 @@ class _LumoClient:
                     yield ev
     def _events_from_obj(self, obj: Dict[str, Any]) -> Generator[Dict[str, Any], None, None]:
         if obj.get("error"):
-            yield {"type": "error", "message": str(obj.get("error"))}
+            err = obj.get("error")
+            if isinstance(err, dict):
+                msg = err.get("message") or str(err)
+            else:
+                msg = str(err)
+            yield {"type": "error", "message": msg}
             return
         marker = obj.get("object")
         if marker in {"lumo.image_data", "chat.tool_call", "chat.tool_result"}:
@@ -372,15 +382,28 @@ class LumoRouter:
         resolved = self.registry.resolve(model)
         lumo_messages = to_lumo_messages(messages)
         lumo_tools = to_lumo_tools(tools)
+        if len(lumo_messages) > MAX_MESSAGES:
+            keep = MESSAGE_TRIM_TARGET
+            system_msgs = [m for m in lumo_messages if m.get("role") == "system"]
+            rest = [m for m in lumo_messages if m.get("role") != "system"]
+            trimmed = system_msgs + rest[-keep:]
+            lumo_messages = trimmed
         if self.pool.total() == 0:
             self.pool.ensure_ready(block=True)
         if self.pool.total() == 0:
             raise NoCredentialsError(f"No credentials available and harvesting failed. Check the browser driver and network, then retry.")
         last_error: Optional[Exception] = None
-        for _ in range(MAX_ATTEMPTS):
+        used_cred_ids: List[str] = []
+        for attempt in range(MAX_ATTEMPTS):
             state = self.pool.acquire()
             if state is None:
-                raise AllCredentialsBusyError("All working credentials are cooling down; try again shortly.")
+                remaining = sum(1 for s in self.pool._states if not s.depleted)
+                if remaining > 0:
+                    raise AllCredentialsBusyError("All working credentials are cooling down; try again shortly.")
+                raise NoCredentialsError("No credentials available and harvesting failed.")
+            if state.credential.id in used_cred_ids:
+                continue
+            used_cred_ids.append(state.credential.id)
             client = _LumoClient(state.credential)
             emitted = False
             usage: Optional[Dict[str, Any]] = None
@@ -390,7 +413,10 @@ class LumoRouter:
                     if etype == "usage":
                         usage = ev.get("usage")
                     if etype == "error":
-                        raise _StreamError(str(ev.get("message")))
+                        msg = str(ev.get("message"))
+                        if "server_error" in msg or "An error occurred during generation" in msg or "server error" in msg.lower():
+                            raise _StreamError(msg)
+                        raise _StreamError(msg)
                     if not emitted:
                         emitted = True
                         yield {"type": "route", "credential_id": state.credential.id, "model": resolved.id}
@@ -400,14 +426,20 @@ class LumoRouter:
             except requests.HTTPError as exc:
                 code = exc.response.status_code if exc.response is not None else None
                 depleted = code in (401, 403, 422, 429)
-                self.pool.report_result(state, ok=False, depleted=depleted, error=f"http {code}")
+                self.pool.report_result(state, ok=False, depleted=depleted, error=f"http {code} / exhausted rate limit")
                 last_error = exc
+                if not depleted and attempt < MAX_ATTEMPTS - 1:
+                    delay = min(RETRY_MAX_DELAY, RETRY_BASE_DELAY * (2 ** attempt)) + _random.random()
+                    time.sleep(delay)
                 if emitted:
                     raise
                 continue
             except _StreamError as exc:
-                self.pool.report_result(state, ok=False, depleted=True, error=str(exc))
+                self.pool.report_result(state, ok=False, depleted=False, error=str(exc))
                 last_error = exc
+                if attempt < MAX_ATTEMPTS - 1:
+                    delay = min(RETRY_MAX_DELAY, RETRY_BASE_DELAY * (2 ** attempt)) + _random.random()
+                    time.sleep(delay)
                 if emitted:
                     raise
                 continue
@@ -416,8 +448,11 @@ class LumoRouter:
                 last_error = exc
                 if emitted:
                     raise
+                if attempt < MAX_ATTEMPTS - 1:
+                    delay = min(RETRY_MAX_DELAY, RETRY_BASE_DELAY * (2 ** attempt)) + _random.random()
+                    time.sleep(delay)
                 continue
-        raise RuntimeError(f"All routing attempts failed. Last error: {last_error}")
+        raise RuntimeError(f"All routing attempts failed ({MAX_ATTEMPTS} attempts). Last error: {last_error}")
     def collect(self, messages: List[Dict[str, Any]], model: Optional[str] = None, tools: Optional[List[Any]] = None, tool_choice: Optional[Any] = None, reasoning: bool = False) -> Dict[str, Any]:
         text_parts: List[str] = []
         reasoning_parts: List[str] = []
