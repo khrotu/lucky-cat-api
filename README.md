@@ -19,7 +19,7 @@ uvicorn lc_server:app --host 127.0.0.1 --port 8000
 
 | ID | Context |
 | --- | --- |
-| `qwen3.5-397b-a17b` | 128k |
+| `qwen3.5-122b-a10b` | 128k |
 | `glm-5.2` | 128k |
 
 ## Endpoints

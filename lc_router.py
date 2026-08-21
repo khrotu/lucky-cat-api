@@ -40,7 +40,7 @@ class LumoModel:
     context_window: int
     aliases: tuple = ()
 MODELS: List[LumoModel] = [
-    LumoModel(id="qwen3.5-397b-a17b", lumo_model="lumo-lite", label="Qwen3.5 397B A17B", context_window=128000, aliases=("lumo-lite", "lumo-basic-v1", "qwen3.5", "qwen")),
+    LumoModel(id="qwen3.5-122b-a10b", lumo_model="lumo-lite", label="Qwen3.5 122B A10B", context_window=128000, aliases=("lumo-lite", "lumo-basic-v1", "qwen3.5", "qwen")),
     LumoModel(id="glm-5.2", lumo_model="lumo-max", label="GLM 5.2", context_window=128000, aliases=("lumo-max", "lumo-plus-v1", "glm5.2", "glm")),
 ]
 class ModelRegistry:
