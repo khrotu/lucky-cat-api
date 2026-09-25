@@ -14,7 +14,7 @@ AUTO_REPLENISH = os.getenv("LC_AUTO_REPLENISH", "1") not in {"0", "false", "Fals
 DEFAULT_ENDPOINT = "https://lumo.proton.me/api/ai/v1/chat/completions"
 DEFAULT_REFERER = "https://lumo.proton.me/guest/"
 DEFAULT_ORIGIN = "https://lumo.proton.me"
-DEFAULT_APP_VERSION = "web-lumo@2.0.0.7"
+DEFAULT_APP_VERSION = "web-lumo@2.0.2.9"
 DEFAULT_LOCALE = "en_US"
 DEFAULT_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36 Edg/150.0.0.0"
 LUMO_TOOL_NAMES = {"proton_info", "web_search", "weather", "stock", "cryptocurrency", "generate_image", "describe_image", "edit_image", "web_extract"}
@@ -41,7 +41,8 @@ class LumoModel:
     aliases: tuple = ()
 MODELS: List[LumoModel] = [
     LumoModel(id="qwen3.5-122b-a10b", lumo_model="lumo-lite", label="Qwen3.5 122B A10B", context_window=128000, aliases=("lumo-lite", "lumo-basic-v1", "qwen3.5", "qwen")),
-    LumoModel(id="glm-5.2", lumo_model="lumo-max", label="GLM 5.2", context_window=128000, aliases=("lumo-max", "lumo-plus-v1", "glm5.2", "glm")),
+    LumoModel(id="glm-5.3", lumo_model="lumo-max", label="GLM 5.3", context_window=128000, aliases=("lumo-max", "lumo-plus-v1", "glm5.3")),
+    LumoModel(id="apertus-1.5", lumo_model="apertus-15", label="Apertus 1.5", context_window=128000, aliases=("apertus-15", "apertus", "apertus1.5")),
 ]
 class ModelRegistry:
     def __init__(self, models: List[LumoModel]) -> None:
@@ -294,7 +295,7 @@ class CredentialPool:
                 state.cooldown_until = 0.0
                 state.last_error = None
                 remaining = (usage or {}).get("remaining_limits") or {}
-                key = "lite" if tier == "lumo-lite" else "max"
+                key = "max" if tier == "lumo-max" else "lite"
                 value = remaining.get(key)
                 if value is not None and value <= 0:
                     state.depleted = True

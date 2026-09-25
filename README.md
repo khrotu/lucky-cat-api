@@ -19,8 +19,9 @@ uvicorn lc_server:app --host 127.0.0.1 --port 8000
 
 | ID | Context |
 | --- | --- |
+| `apertus-1.5` | 128k |
+| `glm-5.3` | 128k |
 | `qwen3.5-122b-a10b` | 128k |
-| `glm-5.2` | 128k |
 
 ## Endpoints
 
