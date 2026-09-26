@@ -68,6 +68,72 @@ class ModelRegistry:
 REGISTRY = ModelRegistry(MODELS)
 class _StreamError(RuntimeError):
     pass
+APERTUS_THINK_START = "<|inner_prefix|>"
+APERTUS_THINK_END = "<|inner_suffix|>"
+APERTUS_STRUCTURAL_TOKENS = (
+    "<|assistant_start|>", "<|assistant_end|>",
+    "<|inner_prefix|>", "<|inner_suffix|>",
+    "<|tools_prefix|>", "<|tools_suffix|>",
+    "<|system_start|>", "<|system_end|>",
+    "<|user_start|>", "<|user_end|>",
+    "<|developer_start|>", "<|developer_end|>",
+    "<s>", "</s>",
+)
+_MAX_APERTUS_TOKEN_LEN = max(len(t) for t in APERTUS_STRUCTURAL_TOKENS)
+def _is_apertus_token_prefix(s: str) -> bool:
+    return any(t.startswith(s) for t in APERTUS_STRUCTURAL_TOKENS)
+class _ApertusContentSplitter:
+    def __init__(self) -> None:
+        self._buf = ""
+        self._in_thinking = False
+    def _channel(self) -> str:
+        return "reasoning" if self._in_thinking else "content"
+    def feed(self, text: str) -> List[tuple]:
+        if text:
+            self._buf += text
+        return self._drain(final=False)
+    def flush(self) -> List[tuple]:
+        return self._drain(final=True)
+    def _drain(self, final: bool) -> List[tuple]:
+        out: List[tuple] = []
+        buf = self._buf
+        while True:
+            earliest: Optional[int] = None
+            earliest_tok: Optional[str] = None
+            for tok in APERTUS_STRUCTURAL_TOKENS:
+                i = buf.find(tok)
+                if i != -1 and (earliest is None or i < earliest):
+                    earliest = i
+                    earliest_tok = tok
+            if earliest is None or earliest_tok is None:
+                break
+            if earliest > 0:
+                out.append((self._channel(), buf[:earliest]))
+            if earliest_tok == APERTUS_THINK_START:
+                self._in_thinking = True
+            elif earliest_tok == APERTUS_THINK_END:
+                self._in_thinking = False
+            buf = buf[earliest + len(earliest_tok):]
+        if final:
+            lt = buf.rfind("<")
+            if lt != -1:
+                tail = buf[lt:]
+                if len(tail) > 1 and _is_apertus_token_prefix(tail):
+                    buf = buf[:lt]
+            if buf:
+                out.append((self._channel(), buf))
+            self._buf = ""
+        else:
+            lt = buf.rfind("<")
+            if lt != -1 and _is_apertus_token_prefix(buf[lt:]):
+                head = buf[:lt]
+                self._buf = buf[lt:]
+            else:
+                head = buf
+                self._buf = ""
+            if head:
+                out.append((self._channel(), head))
+        return [(k, t) for k, t in out if t]
 class _LumoClient:
     def __init__(self, credential: Credential, timeout: int = HTTP_TIMEOUT) -> None:
         self.credential = credential
@@ -408,6 +474,15 @@ class LumoRouter:
             client = _LumoClient(state.credential)
             emitted = False
             usage: Optional[Dict[str, Any]] = None
+            splitter = _ApertusContentSplitter() if resolved.lumo_model == "apertus-15" else None
+            def _emit(piece_kind: str, piece_text: str):
+                nonlocal emitted
+                if not piece_text:
+                    return
+                if not emitted:
+                    emitted = True
+                    yield {"type": "route", "credential_id": state.credential.id, "model": resolved.id}
+                yield {"type": piece_kind, "text": piece_text}
             try:
                 for ev in client.stream(lumo_messages, resolved.lumo_model, lumo_tools, tool_choice, reasoning):
                     etype = ev.get("type")
@@ -418,10 +493,17 @@ class LumoRouter:
                         if "server_error" in msg or "An error occurred during generation" in msg or "server error" in msg.lower():
                             raise _StreamError(msg)
                         raise _StreamError(msg)
+                    if etype == "content" and splitter is not None:
+                        for piece_kind, piece_text in splitter.feed(ev.get("text", "")):
+                            yield from _emit(piece_kind, piece_text)
+                        continue
                     if not emitted:
                         emitted = True
                         yield {"type": "route", "credential_id": state.credential.id, "model": resolved.id}
                     yield ev
+                if splitter is not None:
+                    for piece_kind, piece_text in splitter.flush():
+                        yield from _emit(piece_kind, piece_text)
                 self.pool.report_result(state, ok=True, usage=usage, tier=resolved.lumo_model)
                 return
             except requests.HTTPError as exc:
